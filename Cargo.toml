@@ -51,6 +51,9 @@ esp-wifi = { version = "0.13.0", features = [
 heapless = { version = "0.8.0", default-features = false }
 static_cell = { version = "2.1.0", features = ["nightly"] }
 
+tb6612fng = "1.0.0"
+esp-println = { version = "0.11.0", features = ["esp32c6"] }
+
 [profile.dev]
 # Rust debug is too slow.
 # For debug builds always builds with some optimization
