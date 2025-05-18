@@ -173,8 +173,8 @@ async fn main(spawner: Spawner) {
         motor_b2.drive(DriveCommand::Stop).expect("driving");
 
         motor_a1.drive(DriveCommand::Backward(speed)).expect("driving");
-        motor_a2.drive(DriveCommand::Backward(speed)).expect("driving");
-        motor_b1.drive(DriveCommand::Forward(speed)).expect("driving");
+        motor_a2.drive(DriveCommand::Forward(speed)).expect("driving");
+        motor_b1.drive(DriveCommand::Backward(speed)).expect("driving");
         motor_b2.drive(DriveCommand::Forward(speed)).expect("driving");
 
         delay.delay_millis(interval);
@@ -183,10 +183,10 @@ async fn main(spawner: Spawner) {
         motor_b1.drive(DriveCommand::Stop).expect("driving");
         motor_b2.drive(DriveCommand::Stop).expect("driving");
 
-        motor_b1.drive(DriveCommand::Forward(speed)).expect("driving");
-        motor_b2.drive(DriveCommand::Forward(speed)).expect("driving");
-        motor_a1.drive(DriveCommand::Backward(speed)).expect("driving");
+        motor_a1.drive(DriveCommand::Forward(speed)).expect("driving");
         motor_a2.drive(DriveCommand::Backward(speed)).expect("driving");
+        motor_b1.drive(DriveCommand::Forward(speed)).expect("driving");
+        motor_b2.drive(DriveCommand::Backward(speed)).expect("driving");
 
         delay.delay_millis(interval);
         motor_a1.drive(DriveCommand::Stop).expect("driving");
