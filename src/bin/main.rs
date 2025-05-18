@@ -48,16 +48,16 @@ async fn main(spawner: Spawner) {
     let motor_a1_pin2 = Output::new(peripherals.GPIO22, Level::Low, OutputConfig::default());
     let motor_a2_pin1 = Output::new(peripherals.GPIO21, Level::Low, OutputConfig::default());
     let motor_a2_pin2 = Output::new(peripherals.GPIO20, Level::Low, OutputConfig::default());
-    let motor_b1_pin1 = Output::new(peripherals.GPIO9, Level::Low, OutputConfig::default());
-    let motor_b1_pin2 = Output::new(peripherals.GPIO13, Level::Low, OutputConfig::default());
-    let motor_b2_pin1 = Output::new(peripherals.GPIO18, Level::Low, OutputConfig::default());
-    let motor_b2_pin2 = Output::new(peripherals.GPIO3, Level::Low, OutputConfig::default());
+    let motor_b1_pin1 = Output::new(peripherals.GPIO18, Level::Low, OutputConfig::default());
+    let motor_b1_pin2 = Output::new(peripherals.GPIO3, Level::Low, OutputConfig::default());
+    let motor_b2_pin1 = Output::new(peripherals.GPIO9, Level::Low, OutputConfig::default());
+    let motor_b2_pin2 = Output::new(peripherals.GPIO13, Level::Low, OutputConfig::default());
     let mut stdby_pin = Output::new(peripherals.GPIO11, Level::Low, OutputConfig::default());
 
     let motor_a1_pwm_pin = peripherals.GPIO15;
     let motor_a2_pwm_pin = peripherals.GPIO19;
-    let motor_b1_pwm_pin = peripherals.GPIO12;
-    let motor_b2_pwm_pin = peripherals.GPIO2;
+    let motor_b1_pwm_pin = peripherals.GPIO2;
+    let motor_b2_pwm_pin = peripherals.GPIO12;
 
     let clock_cfg = PeripheralClockConfig::with_frequency(Rate::from_mhz(40)).unwrap();
     let mut mcpwm_a = McPwm::new(peripherals.MCPWM0, clock_cfg);
