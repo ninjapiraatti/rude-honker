@@ -1,0 +1,15 @@
+[package]
+edition = "2021"
+name = "robot-arm"
+version = "0.1.0"
+
+[[bin]]
+name = "robot-arm"
+path = "./src/bin/main.rs"
+
+[dependencies]
+common = { path = "../common" }
+esp-alloc = "0.7.0"
+esp-hal = { version = "=1.0.0-beta.0", features = ["esp32c6", "unstable"] }
+esp-println = { version = "0.11.0", features = ["esp32c6"] }
+esp-riscv-rt = "0.10.0"

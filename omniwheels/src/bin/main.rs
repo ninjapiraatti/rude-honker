@@ -4,7 +4,6 @@
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_println::println;
-//use esp_hal::peripherals::MCPWM0;
 use esp_hal::{
     delay::Delay,
     gpio::{Level, Output, OutputConfig},
@@ -14,14 +13,44 @@ use esp_hal::{
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::systimer::SystemTimer;
 use esp_hal::timer::timg::TimerGroup;
+use esp_wifi::esp_now::{EspNow, BROADCAST_ADDRESS};
+use common::MessageType;
+use static_cell::StaticCell;
+use esp_wifi::EspWifiController;
 
 #[panic_handler]
-fn panic(_: &core::panic::PanicInfo) -> ! {
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    println!("Panic: {:?}", info);
     loop {}
 }
 use tb6612fng::{DriveCommand, Motor};
 
 extern crate alloc;
+
+static WIFI_INIT: StaticCell<EspWifiController<'static>> = StaticCell::new();
+static ESP_NOW: StaticCell<EspNow<'static>> = StaticCell::new();
+
+#[embassy_executor::task]
+async fn esp_now_task(esp_now: &'static mut EspNow<'static>) {
+    println!("ESP-NOW task started, waiting for messages...");
+
+    loop {
+        if let Some(received) = esp_now.receive() {
+            let src = received.info.src_address;
+            println!("Received from {:?}: {:?}", src, received.data());
+
+            if let Some(MessageType::Ping) = received.data().first().and_then(|&b| MessageType::from_byte(b)) {
+                println!("Received ping, sending pong...");
+                let pong_data = [MessageType::Pong as u8];
+                match esp_now.send(&BROADCAST_ADDRESS, &pong_data) {
+                    Ok(_) => println!("Sent pong"),
+                    Err(e) => println!("Send error: {:?}", e),
+                }
+            }
+        }
+        Timer::after(Duration::from_millis(10)).await;
+    }
+}
 
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
@@ -36,12 +65,19 @@ async fn main(spawner: Spawner) {
     esp_hal_embassy::init(timer0.alarm0);
 
     let timer1 = TimerGroup::new(peripherals.TIMG0);
-    let _init = esp_wifi::init(
+    let init = esp_wifi::init(
         timer1.timer0,
         esp_hal::rng::Rng::new(peripherals.RNG),
         peripherals.RADIO_CLK,
     )
     .unwrap();
+    let init = WIFI_INIT.init(init);
+
+    // Initialize ESP-NOW
+    let esp_now = EspNow::new(init, peripherals.WIFI).unwrap();
+    println!("ESP-NOW initialized, version: {:?}", esp_now.version());
+    let esp_now = ESP_NOW.init(esp_now);
+    spawner.spawn(esp_now_task(esp_now)).unwrap();
 
     // Motors
     let motor_a1_pin1 = Output::new(peripherals.GPIO23, Level::Low, OutputConfig::default());
@@ -84,8 +120,7 @@ async fn main(spawner: Spawner) {
     //mcpwm_b.timer1.start(timer_clock_cfg);
     stdby_pin.set_high();
 
-    // TODO: Spawn some tasks
-    let _ = spawner;
+    println!("Omniwheels started, ESP-NOW running in background");
 
     loop {
         //Timer::after(Duration::from_secs(1)).await;
