@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+esp_bootloader_esp_idf::esp_app_desc!();
+
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_hal::{
@@ -10,7 +12,8 @@ use esp_hal::{
     timer::timg::TimerGroup,
 };
 use esp_println::println;
-use esp_wifi::esp_now::{EspNow, BROADCAST_ADDRESS};
+use esp_wifi::esp_now::BROADCAST_ADDRESS;
+use esp_wifi::wifi::{Configuration, ClientConfiguration};
 use esp_wifi::EspWifiController;
 use common::MessageType;
 use static_cell::StaticCell;
@@ -24,10 +27,6 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     println!("Panic: {:?}", info);
     loop {}
 }
-
-// Simple LED on a GPIO - for bare minimum, we use a regular LED instead of WS2812
-// If you have a regular LED on GPIO8 or another pin, this will work
-// For WS2812 RGB LED, we'd need the RMT peripheral with precise timing
 
 #[esp_hal_embassy::main]
 async fn main(_spawner: Spawner) {
@@ -44,19 +43,23 @@ async fn main(_spawner: Spawner) {
     let init = esp_wifi::init(
         timer1.timer0,
         esp_hal::rng::Rng::new(peripherals.RNG),
-        peripherals.RADIO_CLK,
     )
     .unwrap();
     let init = WIFI_INIT.init(init);
 
-    // Use GPIO8 as simple output (for onboard LED or external LED)
-    // Note: The ESP32-C6 dev board's onboard LED is WS2812, but we can
-    // still toggle GPIO8 - it just won't show colors properly
+    // Use GPIO8 as simple output for status indication
     let mut led = Output::new(peripherals.GPIO8, Level::High, OutputConfig::default());
     println!("Controller starting - LED on (searching)");
 
-    // Initialize ESP-NOW
-    let mut esp_now = EspNow::new(init, peripherals.WIFI).unwrap();
+    // Create WiFi interfaces - this gives us ESP-NOW
+    let (mut wifi_controller, interfaces) = esp_wifi::wifi::new(init, peripherals.WIFI).unwrap();
+    let mut esp_now = interfaces.esp_now;
+
+    // Start WiFi in STA mode (required for ESP-NOW)
+    wifi_controller.set_configuration(&Configuration::Client(ClientConfiguration::default())).unwrap();
+    wifi_controller.start().unwrap();
+    println!("WiFi started in STA mode");
+
     println!("ESP-NOW initialized, version: {:?}", esp_now.version());
 
     let mut connected = false;
