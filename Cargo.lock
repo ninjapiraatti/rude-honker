@@ -105,6 +105,7 @@ dependencies = [
  "esp-println",
  "esp-wifi",
  "heapless",
+ "nb 1.1.0",
  "static_cell",
 ]
 

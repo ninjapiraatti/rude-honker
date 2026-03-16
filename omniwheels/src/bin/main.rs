@@ -7,13 +7,17 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_println::println;
 use esp_hal::clock::CpuClock;
+use esp_hal::gpio::{Level, Output, OutputConfig};
+use esp_hal::mcpwm::{operator::PwmPinConfig, timer::PwmWorkingMode, McPwm, PeripheralClockConfig};
+use esp_hal::time::Rate;
 use esp_hal::timer::systimer::SystemTimer;
 use esp_hal::timer::timg::TimerGroup;
 use esp_wifi::esp_now::BROADCAST_ADDRESS;
 use esp_wifi::wifi::{Configuration, ClientConfiguration};
-use common::MessageType;
+use common::{MessageType, MoveCommand};
 use static_cell::StaticCell;
 use esp_wifi::EspWifiController;
+use tb6612fng::{DriveCommand, Motor};
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -24,6 +28,30 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 extern crate alloc;
 
 static WIFI_INIT: StaticCell<EspWifiController<'static>> = StaticCell::new();
+
+/// Convert joystick x,y (-100..100) to individual motor speeds for omniwheel drive
+/// Returns (front_left, front_right, back_left, back_right)
+/// Each value is -100..100 where positive = forward
+fn omniwheel_mix(x: i16, y: i16) -> (i8, i8, i8, i8) {
+    // Standard omniwheel/mecanum configuration:
+    // FL and BR move together, FR and BL move together for strafing
+    let fl = (y + x).clamp(-100, 100) as i8;
+    let fr = (y - x).clamp(-100, 100) as i8;
+    let bl = (y - x).clamp(-100, 100) as i8;
+    let br = (y + x).clamp(-100, 100) as i8;
+    (fl, fr, bl, br)
+}
+
+/// Convert signed speed (-100..100) to DriveCommand
+fn speed_to_command(speed: i8) -> DriveCommand {
+    if speed > 5 {
+        DriveCommand::Forward(speed as u8)
+    } else if speed < -5 {
+        DriveCommand::Backward((-speed) as u8)
+    } else {
+        DriveCommand::Stop
+    }
+}
 
 #[esp_hal_embassy::main]
 async fn main(_spawner: Spawner) {
@@ -44,6 +72,54 @@ async fn main(_spawner: Spawner) {
     .unwrap();
     let init = WIFI_INIT.init(init);
 
+    // ========== MOTOR SETUP ==========
+    // Motor direction pins
+    let motor_a1_pin1 = Output::new(peripherals.GPIO23, Level::Low, OutputConfig::default());
+    let motor_a1_pin2 = Output::new(peripherals.GPIO22, Level::Low, OutputConfig::default());
+    let motor_a2_pin1 = Output::new(peripherals.GPIO21, Level::Low, OutputConfig::default());
+    let motor_a2_pin2 = Output::new(peripherals.GPIO20, Level::Low, OutputConfig::default());
+    let motor_b1_pin1 = Output::new(peripherals.GPIO18, Level::Low, OutputConfig::default());
+    let motor_b1_pin2 = Output::new(peripherals.GPIO3, Level::Low, OutputConfig::default());
+    let motor_b2_pin1 = Output::new(peripherals.GPIO9, Level::Low, OutputConfig::default());
+    let motor_b2_pin2 = Output::new(peripherals.GPIO13, Level::Low, OutputConfig::default());
+    let mut stdby_pin = Output::new(peripherals.GPIO11, Level::Low, OutputConfig::default());
+
+    // PWM pins
+    let motor_a1_pwm_pin = peripherals.GPIO15;
+    let motor_a2_pwm_pin = peripherals.GPIO19;
+    let motor_b1_pwm_pin = peripherals.GPIO2;
+    let motor_b2_pwm_pin = peripherals.GPIO12;
+
+    // MCPWM setup
+    let clock_cfg = PeripheralClockConfig::with_frequency(Rate::from_mhz(40)).unwrap();
+    let mut mcpwm_a = McPwm::new(peripherals.MCPWM0, clock_cfg);
+    mcpwm_a.operator0.set_timer(&mcpwm_a.timer0);
+    mcpwm_a.operator1.set_timer(&mcpwm_a.timer1);
+
+    let motor_a1_pwm = mcpwm_a.operator0.with_pins(
+        motor_a1_pwm_pin, PwmPinConfig::UP_ACTIVE_HIGH,
+        motor_a2_pwm_pin, PwmPinConfig::UP_ACTIVE_HIGH,
+    );
+    let motor_b1_pwm = mcpwm_a.operator1.with_pins(
+        motor_b1_pwm_pin, PwmPinConfig::UP_ACTIVE_HIGH,
+        motor_b2_pwm_pin, PwmPinConfig::UP_ACTIVE_HIGH,
+    );
+
+    let mut motor_a1 = Motor::new(motor_a1_pin1, motor_a1_pin2, motor_a1_pwm.0).unwrap();
+    let mut motor_a2 = Motor::new(motor_a2_pin1, motor_a2_pin2, motor_a1_pwm.1).unwrap();
+    let mut motor_b1 = Motor::new(motor_b1_pin1, motor_b1_pin2, motor_b1_pwm.0).unwrap();
+    let mut motor_b2 = Motor::new(motor_b2_pin1, motor_b2_pin2, motor_b1_pwm.1).unwrap();
+
+    let timer_clock_cfg = clock_cfg
+        .timer_clock_with_frequency(99, PwmWorkingMode::Increase, Rate::from_khz(20))
+        .unwrap();
+    mcpwm_a.timer0.start(timer_clock_cfg);
+    mcpwm_a.timer1.start(timer_clock_cfg);
+
+    // Enable motor driver
+    stdby_pin.set_high();
+    println!("Motors initialized");
+
     // Create WiFi interfaces - this gives us ESP-NOW
     let (mut wifi_controller, interfaces) = esp_wifi::wifi::new(init, peripherals.WIFI).unwrap();
     let mut esp_now = interfaces.esp_now;
@@ -54,23 +130,37 @@ async fn main(_spawner: Spawner) {
     println!("WiFi started in STA mode");
 
     println!("ESP-NOW initialized, version: {:?}", esp_now.version());
-    println!("Omniwheels minimal ESP-NOW PoC started - waiting for pings...");
+    println!("Omniwheels ready - waiting for controller...");
 
     loop {
         // Check for incoming messages
         if let Some(received) = esp_now.receive() {
-            let src = received.info.src_address;
-            println!("Received from {:?}: {:?}", src, received.data());
+            let data = received.data();
 
-            if let Some(MessageType::Ping) = received.data().first().and_then(|&b| MessageType::from_byte(b)) {
-                println!("Received ping, sending pong...");
-                let pong_data = [MessageType::Pong as u8];
-                match esp_now.send(&BROADCAST_ADDRESS, &pong_data) {
-                    Ok(_) => println!("Sent pong"),
-                    Err(e) => println!("Send error: {:?}", e),
+            match data.first().and_then(|&b| MessageType::from_byte(b)) {
+                Some(MessageType::Ping) => {
+                    let pong_data = [MessageType::Pong as u8];
+                    let _ = esp_now.send(&BROADCAST_ADDRESS, &pong_data);
+                    println!("Pong sent");
                 }
+                Some(MessageType::Move) => {
+                    if let Some(cmd) = MoveCommand::from_bytes(data) {
+                        let (fl, fr, bl, br) = omniwheel_mix(cmd.x, cmd.y);
+
+                        motor_a1.drive(speed_to_command(fl)).ok();
+                        motor_a2.drive(speed_to_command(fr)).ok();
+                        motor_b1.drive(speed_to_command(bl)).ok();
+                        motor_b2.drive(speed_to_command(br)).ok();
+
+                        if cmd.x != 0 || cmd.y != 0 {
+                            println!("Move x={} y={} -> FL:{} FR:{} BL:{} BR:{}",
+                                cmd.x, cmd.y, fl, fr, bl, br);
+                        }
+                    }
+                }
+                _ => {}
             }
         }
-        Timer::after(Duration::from_millis(100)).await;
+        Timer::after(Duration::from_millis(10)).await;
     }
 }
