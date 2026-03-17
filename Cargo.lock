@@ -1215,9 +1215,12 @@ name = "robot-arm"
 version = "0.1.0"
 dependencies = [
  "common",
+ "embassy-executor",
+ "embassy-time",
  "esp-alloc",
  "esp-bootloader-esp-idf",
  "esp-hal",
+ "esp-hal-embassy",
  "esp-println",
 ]
 
