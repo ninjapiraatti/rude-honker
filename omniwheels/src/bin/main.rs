@@ -38,7 +38,7 @@ fn omniwheel_mix(x: i16, y: i16, mode: DriveMode) -> (i8, i8, i8, i8) {
         // Strafe: FL & BR pair against FR & BL (mecanum sideways translation).
         DriveMode::Strafe => (y + x, y - x, y - x, y + x),
         // Rotate: left wheels against right wheels (spin in place).
-        DriveMode::Rotate => (y + x, y - x, y + x, y - x),
+        DriveMode::Rotate => (y - x, y + x, y - x, y + x),
     };
     (
         fl.clamp(-100, 100) as i8,

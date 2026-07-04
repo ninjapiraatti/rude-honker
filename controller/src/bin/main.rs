@@ -4,7 +4,7 @@
 esp_bootloader_esp_idf::esp_app_desc!();
 
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 use esp_hal::{
     analog::adc::{Adc, AdcCalCurve, AdcConfig, Attenuation},
     clock::CpuClock,
@@ -106,15 +106,25 @@ async fn main(_spawner: Spawner) {
     let mut last_move = MoveCommand::default();
     let mut mode = DriveMode::Strafe;
     let mut button_was_down = false;
+    let mut last_toggle = Instant::now();
+    // Resend the mode a few times after a switch so a dropped packet can't
+    // leave the base stuck on the old mode.
+    let mut mode_resends: u8 = 0;
 
     loop {
-        // Toggle drive mode on button press (falling edge, active low)
+        // Toggle drive mode on button press (falling edge, active low).
+        // Ignore edges within the debounce window to reject contact bounce,
+        // which would otherwise double-toggle and leave us in the wrong mode.
+        const DEBOUNCE: Duration = Duration::from_millis(250);
         let button_down = button.is_low();
-        if button_down && !button_was_down {
+        let now = Instant::now();
+        if button_down && !button_was_down && now.duration_since(last_toggle) > DEBOUNCE {
             mode = match mode {
                 DriveMode::Strafe => DriveMode::Rotate,
                 DriveMode::Rotate => DriveMode::Strafe,
             };
+            last_toggle = now;
+            mode_resends = 3;
             println!("Drive mode: {:?}", mode);
         }
         button_was_down = button_down;
@@ -142,8 +152,11 @@ async fn main(_spawner: Spawner) {
             let x = adc_to_joystick(vrx_raw, vrx_center);
             let y = adc_to_joystick(vry_raw, vry_center);
 
-            // Only send if changed significantly, or the mode changed
-            if (x - last_move.x).abs() > 5 || (y - last_move.y).abs() > 5 || mode != last_move.mode {
+            // Send if the stick moved significantly, the mode changed, or we
+            // still owe a few post-switch resends for reliability.
+            if (x - last_move.x).abs() > 5 || (y - last_move.y).abs() > 5
+                || mode != last_move.mode || mode_resends > 0
+            {
                 let cmd = MoveCommand { x, y, mode };
                 match esp_now.send(&BROADCAST_ADDRESS, &cmd.to_bytes()) {
                     Ok(_) => {
@@ -154,6 +167,7 @@ async fn main(_spawner: Spawner) {
                     Err(e) => println!("Send error: {:?}", e),
                 }
                 last_move = cmd;
+                mode_resends = mode_resends.saturating_sub(1);
             }
         }
 
