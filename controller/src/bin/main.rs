@@ -16,7 +16,7 @@ use esp_println::println;
 use esp_wifi::esp_now::BROADCAST_ADDRESS;
 use esp_wifi::wifi::{Configuration, ClientConfiguration};
 use esp_wifi::EspWifiController;
-use common::{MessageType, MoveCommand};
+use common::{DriveMode, MessageType, MoveCommand};
 use static_cell::StaticCell;
 
 extern crate alloc;
@@ -74,8 +74,8 @@ async fn main(_spawner: Spawner) {
     let mut vry_pin = adc_config.enable_pin_with_cal::<_, AdcCalCurve<_>>(peripherals.GPIO4, Attenuation::_11dB);
     let mut adc = Adc::new(peripherals.ADC1, adc_config);
 
-    // Joystick button (GPIO5 with internal pull-up, active low)
-    let _button = Input::new(peripherals.GPIO5, InputConfig::default().with_pull(Pull::Up));
+    // Joystick button (GPIO5 with internal pull-up, active low) - toggles drive mode
+    let button = Input::new(peripherals.GPIO5, InputConfig::default().with_pull(Pull::Up));
 
     // Calibrate joystick center - sample multiple times and average
     println!("Calibrating joystick - keep it centered...");
@@ -104,8 +104,21 @@ async fn main(_spawner: Spawner) {
     let mut connected = false;
     let mut blink_state = false;
     let mut last_move = MoveCommand::default();
+    let mut mode = DriveMode::Strafe;
+    let mut button_was_down = false;
 
     loop {
+        // Toggle drive mode on button press (falling edge, active low)
+        let button_down = button.is_low();
+        if button_down && !button_was_down {
+            mode = match mode {
+                DriveMode::Strafe => DriveMode::Rotate,
+                DriveMode::Rotate => DriveMode::Strafe,
+            };
+            println!("Drive mode: {:?}", mode);
+        }
+        button_was_down = button_down;
+
         // Blink while not connected
         if !connected {
             blink_state = !blink_state;
@@ -129,13 +142,13 @@ async fn main(_spawner: Spawner) {
             let x = adc_to_joystick(vrx_raw, vrx_center);
             let y = adc_to_joystick(vry_raw, vry_center);
 
-            // Only send if changed significantly
-            if (x - last_move.x).abs() > 5 || (y - last_move.y).abs() > 5 {
-                let cmd = MoveCommand { x, y };
+            // Only send if changed significantly, or the mode changed
+            if (x - last_move.x).abs() > 5 || (y - last_move.y).abs() > 5 || mode != last_move.mode {
+                let cmd = MoveCommand { x, y, mode };
                 match esp_now.send(&BROADCAST_ADDRESS, &cmd.to_bytes()) {
                     Ok(_) => {
                         if x != 0 || y != 0 {
-                            println!("Move: x={}, y={}", x, y);
+                            println!("Move: x={}, y={} ({:?})", x, y, mode);
                         }
                     }
                     Err(e) => println!("Send error: {:?}", e),

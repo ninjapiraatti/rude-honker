@@ -14,7 +14,7 @@ use esp_hal::timer::systimer::SystemTimer;
 use esp_hal::timer::timg::TimerGroup;
 use esp_wifi::esp_now::BROADCAST_ADDRESS;
 use esp_wifi::wifi::{Configuration, ClientConfiguration};
-use common::{MessageType, MoveCommand};
+use common::{DriveMode, MessageType, MoveCommand};
 use static_cell::StaticCell;
 use esp_wifi::EspWifiController;
 use tb6612fng::{DriveCommand, Motor};
@@ -32,14 +32,20 @@ static WIFI_INIT: StaticCell<EspWifiController<'static>> = StaticCell::new();
 /// Convert joystick x,y (-100..100) to individual motor speeds for omniwheel drive
 /// Returns (front_left, front_right, back_left, back_right)
 /// Each value is -100..100 where positive = forward
-fn omniwheel_mix(x: i16, y: i16) -> (i8, i8, i8, i8) {
-    // Standard omniwheel/mecanum configuration:
-    // FL and BR move together, FR and BL move together for strafing
-    let fl = (y + x).clamp(-100, 100) as i8;
-    let fr = (y - x).clamp(-100, 100) as i8;
-    let bl = (y - x).clamp(-100, 100) as i8;
-    let br = (y + x).clamp(-100, 100) as i8;
-    (fl, fr, bl, br)
+fn omniwheel_mix(x: i16, y: i16, mode: DriveMode) -> (i8, i8, i8, i8) {
+    // y always drives forward/back (all wheels together). The x term differs:
+    let (fl, fr, bl, br) = match mode {
+        // Strafe: FL & BR pair against FR & BL (mecanum sideways translation).
+        DriveMode::Strafe => (y + x, y - x, y - x, y + x),
+        // Rotate: left wheels against right wheels (spin in place).
+        DriveMode::Rotate => (y + x, y - x, y + x, y - x),
+    };
+    (
+        fl.clamp(-100, 100) as i8,
+        fr.clamp(-100, 100) as i8,
+        bl.clamp(-100, 100) as i8,
+        br.clamp(-100, 100) as i8,
+    )
 }
 
 /// Convert signed speed (-100..100) to DriveCommand
@@ -145,7 +151,7 @@ async fn main(_spawner: Spawner) {
                 }
                 Some(MessageType::Move) => {
                     if let Some(cmd) = MoveCommand::from_bytes(data) {
-                        let (fl, fr, bl, br) = omniwheel_mix(cmd.x, cmd.y);
+                        let (fl, fr, bl, br) = omniwheel_mix(cmd.x, cmd.y, cmd.mode);
 
                         motor_a1.drive(speed_to_command(fl)).ok();
                         motor_a2.drive(speed_to_command(fr)).ok();
@@ -153,8 +159,8 @@ async fn main(_spawner: Spawner) {
                         motor_b2.drive(speed_to_command(br)).ok();
 
                         if cmd.x != 0 || cmd.y != 0 {
-                            println!("Move x={} y={} -> FL:{} FR:{} BL:{} BR:{}",
-                                cmd.x, cmd.y, fl, fr, bl, br);
+                            println!("Move x={} y={} ({:?}) -> FL:{} FR:{} BL:{} BR:{}",
+                                cmd.x, cmd.y, cmd.mode, fl, fr, bl, br);
                         }
                     }
                 }
