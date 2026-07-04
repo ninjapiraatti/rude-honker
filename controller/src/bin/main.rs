@@ -6,7 +6,7 @@ esp_bootloader_esp_idf::esp_app_desc!();
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_hal::{
-    analog::adc::{Adc, AdcConfig, Attenuation},
+    analog::adc::{Adc, AdcCalCurve, AdcConfig, Attenuation},
     clock::CpuClock,
     gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},
     timer::systimer::SystemTimer,
@@ -29,23 +29,20 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
-// Joystick deadzone (raw ADC value deviation from center)
+// Joystick deadzone (deviation from center, in calibrated millivolts)
 const DEADZONE: i16 = 150;
 
-/// Convert raw ADC value to joystick value (-100 to 100) with calibrated center
-fn adc_to_joystick(raw: u16, center: u16) -> i16 {
-    let centered = (raw as i32) - (center as i32);
-    if (centered.abs() as i16) < DEADZONE {
+/// Convert a calibrated ADC reading (millivolts) to a joystick value (-100..100).
+///
+/// With ADC calibration the reading is linear in mV. A joystick pot is
+/// ratiometric, so it rests at ~Vsupply/2 and swings 0..Vsupply — meaning the
+/// span in each direction is simply `center`.
+fn adc_to_joystick(mv: u16, center: u16) -> i16 {
+    let centered = (mv as i32) - (center as i32);
+    if centered.unsigned_abs() < DEADZONE as u32 {
         return 0;
     }
-    // Map to -100..100, using center as the range reference
-    let range = if centered > 0 {
-        (4095 - center) as i32  // range to max
-    } else {
-        center as i32  // range to min
-    };
-    let scaled = (centered * 100) / range;
-    scaled.clamp(-100, 100) as i16
+    ((centered * 100) / center as i32).clamp(-100, 100) as i16
 }
 
 #[esp_hal_embassy::main]
@@ -73,8 +70,8 @@ async fn main(_spawner: Spawner) {
 
     // Setup ADC for joystick (GPIO3 = VRx, GPIO4 = VRy)
     let mut adc_config = AdcConfig::new();
-    let mut vrx_pin = adc_config.enable_pin(peripherals.GPIO3, Attenuation::_11dB);
-    let mut vry_pin = adc_config.enable_pin(peripherals.GPIO4, Attenuation::_11dB);
+    let mut vrx_pin = adc_config.enable_pin_with_cal::<_, AdcCalCurve<_>>(peripherals.GPIO3, Attenuation::_11dB);
+    let mut vry_pin = adc_config.enable_pin_with_cal::<_, AdcCalCurve<_>>(peripherals.GPIO4, Attenuation::_11dB);
     let mut adc = Adc::new(peripherals.ADC1, adc_config);
 
     // Joystick button (GPIO5 with internal pull-up, active low)
